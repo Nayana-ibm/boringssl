@@ -108,6 +108,7 @@
 
 #include <openssl/bn.h>
 
+#include <assert.h>
 #include <string.h>
 
 #include <openssl/err.h>
@@ -124,6 +125,11 @@
 #define OPENSSL_BN_ASM_MONT
 #endif
 
+static int bn_mod_mul_montgomery_fallback(BIGNUM *r, const BIGNUM *a,
+                                          const BIGNUM *b,
+                                          const BN_MONT_CTX *mont, BN_CTX *ctx);
+
+
 BN_MONT_CTX *BN_MONT_CTX_new(void) {
   BN_MONT_CTX *ret = OPENSSL_malloc(sizeof(BN_MONT_CTX));
 
@@ -131,7 +137,7 @@ BN_MONT_CTX *BN_MONT_CTX_new(void) {
     return NULL;
   }
 
-  memset(ret, 0, sizeof(BN_MONT_CTX));
+  OPENSSL_memset(ret, 0, sizeof(BN_MONT_CTX));
   BN_init(&ret->RR);
   BN_init(&ret->N);
 
@@ -186,9 +192,6 @@ int BN_MONT_CTX_set(BN_MONT_CTX *mont, const BIGNUM *mod, BN_CTX *ctx) {
     OPENSSL_PUT_ERROR(BN, ERR_R_INTERNAL_ERROR);
     return 0;
   }
-  if (BN_get_flags(mod, BN_FLG_CONSTTIME)) {
-    BN_set_flags(&mont->N, BN_FLG_CONSTTIME);
-  }
 
   /* Find n0 such that n0 * N == -1 (mod r).
    *
@@ -207,12 +210,13 @@ int BN_MONT_CTX_set(BN_MONT_CTX *mont, const BIGNUM *mod, BN_CTX *ctx) {
   /* Save RR = R**2 (mod N). R is the smallest power of 2**BN_BITS such that R
    * > mod. Even though the assembly on some 32-bit platforms works with 64-bit
    * values, using |BN_BITS2| here, rather than |BN_MONT_CTX_N0_LIMBS *
-   * BN_BITS2|, is correct because because R^2 will still be a multiple of the
-   * latter as |BN_MONT_CTX_N0_LIMBS| is either one or two. */
+   * BN_BITS2|, is correct because R**2 will still be a multiple of the latter
+   * as |BN_MONT_CTX_N0_LIMBS| is either one or two.
+   *
+   * XXX: This is not constant time with respect to |mont->N|, but it should
+   * be. */
   unsigned lgBigR = (BN_num_bits(mod) + (BN_BITS2 - 1)) / BN_BITS2 * BN_BITS2;
-  BN_zero(&mont->RR);
-  if (!BN_set_bit(&mont->RR, lgBigR * 2) ||
-      !BN_mod(&mont->RR, &mont->RR, &mont->N, ctx)) {
+  if (!bn_mod_exp_base_2_vartime(&mont->RR, lgBigR * 2, &mont->N)) {
     return 0;
   }
 
@@ -279,7 +283,7 @@ static int BN_from_montgomery_word(BIGNUM *ret, BIGNUM *r,
 
   /* clear the top words of T */
   if (max > r->top) {
-    memset(&rp[r->top], 0, (max - r->top) * sizeof(BN_ULONG));
+    OPENSSL_memset(&rp[r->top], 0, (max - r->top) * sizeof(BN_ULONG));
   }
 
   r->top = max;
@@ -362,27 +366,43 @@ err:
 
 int BN_mod_mul_montgomery(BIGNUM *r, const BIGNUM *a, const BIGNUM *b,
                           const BN_MONT_CTX *mont, BN_CTX *ctx) {
-  BIGNUM *tmp;
-  int ret = 0;
-
-#if defined(OPENSSL_BN_ASM_MONT)
+#if !defined(OPENSSL_BN_ASM_MONT)
+  return bn_mod_mul_montgomery_fallback(r, a, b, mont, ctx);
+#else
   int num = mont->N.top;
 
-  if (num > 1 && a->top == num && b->top == num) {
-    if (bn_wexpand(r, num) == NULL) {
-      return 0;
-    }
-    if (bn_mul_mont(r->d, a->d, b->d, mont->N.d, mont->n0, num)) {
-      r->neg = a->neg ^ b->neg;
-      r->top = num;
-      bn_correct_top(r);
-      return 1;
-    }
+  /* |bn_mul_mont| requires at least 128 bits of limbs, at least for x86. */
+  if (num < (128 / BN_BITS2) ||
+      a->top != num ||
+      b->top != num) {
+    return bn_mod_mul_montgomery_fallback(r, a, b, mont, ctx);
   }
+
+  if (bn_wexpand(r, num) == NULL) {
+    return 0;
+  }
+  if (!bn_mul_mont(r->d, a->d, b->d, mont->N.d, mont->n0, num)) {
+    /* The check above ensures this won't happen. */
+    assert(0);
+    OPENSSL_PUT_ERROR(BN, ERR_R_INTERNAL_ERROR);
+    return 0;
+  }
+  r->neg = a->neg ^ b->neg;
+  r->top = num;
+  bn_correct_top(r);
+
+  return 1;
 #endif
+}
+
+static int bn_mod_mul_montgomery_fallback(BIGNUM *r, const BIGNUM *a,
+                                          const BIGNUM *b,
+                                          const BN_MONT_CTX *mont,
+                                          BN_CTX *ctx) {
+  int ret = 0;
 
   BN_CTX_start(ctx);
-  tmp = BN_CTX_get(ctx);
+  BIGNUM *tmp = BN_CTX_get(ctx);
   if (tmp == NULL) {
     goto err;
   }

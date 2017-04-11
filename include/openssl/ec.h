@@ -86,7 +86,7 @@ typedef enum {
    * is. */
   POINT_CONVERSION_COMPRESSED = 2,
 
-  /* POINT_CONVERSION_COMPRESSED indicates that the point is encoded as
+  /* POINT_CONVERSION_UNCOMPRESSED indicates that the point is encoded as
    * z||x||y, where z is the octet 0x04. */
   POINT_CONVERSION_UNCOMPRESSED = 4,
 
@@ -272,8 +272,8 @@ OPENSSL_EXPORT int EC_POINT_add(const EC_GROUP *group, EC_POINT *r,
 OPENSSL_EXPORT int EC_POINT_dbl(const EC_GROUP *group, EC_POINT *r,
                                 const EC_POINT *a, BN_CTX *ctx);
 
-/* EC_POINT_invert sets |a| equal to minus |a|. It returns one on success and zero
- * otherwise. If |ctx| is not NULL, it may be used. */
+/* EC_POINT_invert sets |a| equal to minus |a|. It returns one on success and
+ * zero otherwise. If |ctx| is not NULL, it may be used. */
 OPENSSL_EXPORT int EC_POINT_invert(const EC_GROUP *group, EC_POINT *a,
                                    BN_CTX *ctx);
 

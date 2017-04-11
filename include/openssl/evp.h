@@ -97,12 +97,6 @@ OPENSSL_EXPORT int EVP_PKEY_up_ref(EVP_PKEY *pkey);
  * an error to attempt to duplicate, export, or compare an opaque key. */
 OPENSSL_EXPORT int EVP_PKEY_is_opaque(const EVP_PKEY *pkey);
 
-/* EVP_PKEY_supports_digest returns one if |pkey| supports digests of
- * type |md|. This is intended for use with EVP_PKEYs backing custom
- * implementations which can't sign all digests. */
-OPENSSL_EXPORT int EVP_PKEY_supports_digest(const EVP_PKEY *pkey,
-                                            const EVP_MD *md);
-
 /* EVP_PKEY_cmp compares |a| and |b| and returns one if they are equal, zero if
  * not and a negative number on error.
  *
@@ -163,10 +157,21 @@ OPENSSL_EXPORT int EVP_PKEY_assign_EC_KEY(EVP_PKEY *pkey, EC_KEY *key);
 OPENSSL_EXPORT EC_KEY *EVP_PKEY_get0_EC_KEY(EVP_PKEY *pkey);
 OPENSSL_EXPORT EC_KEY *EVP_PKEY_get1_EC_KEY(EVP_PKEY *pkey);
 
+/* EVP_PKEY_new_ed25519_public returns a newly allocated |EVP_PKEY| wrapping an
+ * Ed25519 public key, or NULL on allocation error. */
+OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_new_ed25519_public(
+    const uint8_t public_key[32]);
+
+/* EVP_PKEY_new_ed25519_private returns a newly allocated |EVP_PKEY| wrapping an
+ * Ed25519 private key, or NULL on allocation error. */
+OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_new_ed25519_private(
+    const uint8_t private_key[64]);
+
 #define EVP_PKEY_NONE NID_undef
 #define EVP_PKEY_RSA NID_rsaEncryption
 #define EVP_PKEY_DSA NID_dsa
 #define EVP_PKEY_EC NID_X9_62_id_ecPublicKey
+#define EVP_PKEY_ED25519 NID_Ed25519
 
 /* EVP_PKEY_assign sets the underlying key of |pkey| to |key|, which must be of
  * the given type. The |type| argument should be one of the |EVP_PKEY_*|
@@ -174,7 +179,7 @@ OPENSSL_EXPORT EC_KEY *EVP_PKEY_get1_EC_KEY(EVP_PKEY *pkey);
 OPENSSL_EXPORT int EVP_PKEY_assign(EVP_PKEY *pkey, int type, void *key);
 
 /* EVP_PKEY_set_type sets the type of |pkey| to |type|, which should be one of
- * the |EVP_PKEY_*| values. It returns one if sucessful or zero otherwise. If
+ * the |EVP_PKEY_*| values. It returns one if successful or zero otherwise. If
  * |pkey| is NULL, it simply reports whether the type is known. */
 OPENSSL_EXPORT int EVP_PKEY_set_type(EVP_PKEY *pkey, int type);
 
@@ -229,6 +234,10 @@ OPENSSL_EXPORT int EVP_marshal_private_key(CBB *cbb, const EVP_PKEY *key);
  * operation will be written to |*pctx|; this can be used to set alternative
  * signing options.
  *
+ * This function performs a streaming signing operation and will fail for
+ * signature algorithms which do not support this. Use |EVP_PKEY_sign_message|
+ * for a single-shot operation.
+ *
  * It returns one on success, or zero on error. */
 OPENSSL_EXPORT int EVP_DigestSignInit(EVP_MD_CTX *ctx, EVP_PKEY_CTX **pctx,
                                       const EVP_MD *type, ENGINE *e,
@@ -258,6 +267,10 @@ OPENSSL_EXPORT int EVP_DigestSignFinal(EVP_MD_CTX *ctx, uint8_t *out_sig,
  * |EVP_MD_CTX_init|. If |pctx| is not NULL, the |EVP_PKEY_CTX| of the signing
  * operation will be written to |*pctx|; this can be used to set alternative
  * signing options.
+ *
+ * This function performs streaming signature verification and will fail for
+ * signature algorithms which do not support this. Use |EVP_PKEY_verify_message|
+ * for a single-shot verification.
  *
  * It returns one on success, or zero on error. */
 OPENSSL_EXPORT int EVP_DigestVerifyInit(EVP_MD_CTX *ctx, EVP_PKEY_CTX **pctx,
@@ -378,9 +391,10 @@ OPENSSL_EXPORT int PKCS5_PBKDF2_HMAC(const char *password, size_t password_len,
 /* PKCS5_PBKDF2_HMAC_SHA1 is the same as PKCS5_PBKDF2_HMAC, but with |digest|
  * fixed to |EVP_sha1|. */
 OPENSSL_EXPORT int PKCS5_PBKDF2_HMAC_SHA1(const char *password,
-                                          size_t password_len, const uint8_t *salt,
-                                          size_t salt_len, unsigned iterations,
-                                          size_t key_len, uint8_t *out_key);
+                                          size_t password_len,
+                                          const uint8_t *salt, size_t salt_len,
+                                          unsigned iterations, size_t key_len,
+                                          uint8_t *out_key);
 
 
 /* Public key contexts.
@@ -414,11 +428,15 @@ OPENSSL_EXPORT EVP_PKEY *EVP_PKEY_CTX_get0_pkey(EVP_PKEY_CTX *ctx);
  * It returns one on success or zero on error. */
 OPENSSL_EXPORT int EVP_PKEY_sign_init(EVP_PKEY_CTX *ctx);
 
-/* EVP_PKEY_sign signs |data_len| bytes from |data| using |ctx|. If |sig| is
+/* EVP_PKEY_sign signs |digest_len| bytes from |digest| using |ctx|. If |sig| is
  * NULL, the maximum size of the signature is written to
  * |out_sig_len|. Otherwise, |*sig_len| must contain the number of bytes of
  * space available at |sig|. If sufficient, the signature will be written to
  * |sig| and |*sig_len| updated with the true length.
+ *
+ * This function expects a pre-hashed input and will fail for signature
+ * algorithms which do not support this. Use |EVP_PKEY_sign_message| or
+ * |EVP_DigestSignInit| to sign an unhashed input.
  *
  * WARNING: Setting |sig| to NULL only gives the maximum size of the
  * signature. The actual signature may be smaller.
@@ -426,8 +444,23 @@ OPENSSL_EXPORT int EVP_PKEY_sign_init(EVP_PKEY_CTX *ctx);
  * It returns one on success or zero on error. (Note: this differs from
  * OpenSSL, which can also return negative values to indicate an error. ) */
 OPENSSL_EXPORT int EVP_PKEY_sign(EVP_PKEY_CTX *ctx, uint8_t *sig,
-                                 size_t *sig_len, const uint8_t *data,
-                                 size_t data_len);
+                                 size_t *sig_len, const uint8_t *digest,
+                                 size_t digest_len);
+
+/* EVP_PKEY_sign_message signs |data_len| bytes from |data| using |ctx|. If
+ * |sig| is NULL, the maximum size of the signature is written to |out_sig_len|.
+ * Otherwise, |*sig_len| must contain the number of bytes of space available at
+ * |sig|. If sufficient, the signature will be written to |sig| and |*sig_len|
+ * updated with the true length.
+ *
+ * WARNING: Setting |sig| to NULL only gives the maximum size of the
+ * signature. The actual signature may be smaller.
+ *
+ * It returns one on success or zero on error. (Note: this differs from
+ * OpenSSL, which can also return negative values to indicate an error. ) */
+OPENSSL_EXPORT int EVP_PKEY_sign_message(EVP_PKEY_CTX *ctx, uint8_t *sig,
+                                         size_t *sig_len, const uint8_t *data,
+                                         size_t data_len);
 
 /* EVP_PKEY_verify_init initialises an |EVP_PKEY_CTX| for a signature
  * verification operation. It should be called before |EVP_PKEY_verify|.
@@ -435,13 +468,24 @@ OPENSSL_EXPORT int EVP_PKEY_sign(EVP_PKEY_CTX *ctx, uint8_t *sig,
  * It returns one on success or zero on error. */
 OPENSSL_EXPORT int EVP_PKEY_verify_init(EVP_PKEY_CTX *ctx);
 
-/* EVP_PKEY_verify verifies that |sig_len| bytes from |sig| are a valid signature
- * for |data|.
+/* EVP_PKEY_verify verifies that |sig_len| bytes from |sig| are a valid
+ * signature for |digest|.
+ *
+ * This function expects a pre-hashed input and will fail for signature
+ * algorithms which do not support this. Use |EVP_PKEY_verify_message| or
+ * |EVP_DigestVerifyInit| to verify a signature given the unhashed input.
  *
  * It returns one on success or zero on error. */
 OPENSSL_EXPORT int EVP_PKEY_verify(EVP_PKEY_CTX *ctx, const uint8_t *sig,
-                                   size_t sig_len, const uint8_t *data,
-                                   size_t data_len);
+                                   size_t sig_len, const uint8_t *digest,
+                                   size_t digest_len);
+
+/* EVP_PKEY_verify_message verifies that |sig_len| bytes from |sig| are a valid
+ * signature for |data|. It returns one on success or zero on error. */
+OPENSSL_EXPORT int EVP_PKEY_verify_message(EVP_PKEY_CTX *ctx,
+                                           const uint8_t *sig, size_t sig_len,
+                                           const uint8_t *data,
+                                           size_t data_len);
 
 /* EVP_PKEY_encrypt_init initialises an |EVP_PKEY_CTX| for an encryption
  * operation. It should be called before |EVP_PKEY_encrypt|.
@@ -577,7 +621,10 @@ OPENSSL_EXPORT int EVP_PKEY_CTX_get_rsa_padding(EVP_PKEY_CTX *ctx,
 /* EVP_PKEY_CTX_set_rsa_pss_saltlen sets the length of the salt in a PSS-padded
  * signature. A value of -1 cause the salt to be the same length as the digest
  * in the signature. A value of -2 causes the salt to be the maximum length
- * that will fit. Otherwise the value gives the size of the salt in bytes.
+ * that will fit when signing and recovered from the signature when verifying.
+ * Otherwise the value gives the size of the salt in bytes.
+ *
+ * If unsure, use -1.
  *
  * Returns one on success or zero on error. */
 OPENSSL_EXPORT int EVP_PKEY_CTX_set_rsa_pss_saltlen(EVP_PKEY_CTX *ctx,
@@ -735,7 +782,7 @@ struct evp_pkey_st {
   int type;
 
   union {
-    char *ptr;
+    void *ptr;
     RSA *rsa;
     DSA *dsa;
     DH *dh;
@@ -793,5 +840,7 @@ BORINGSSL_MAKE_DELETER(EVP_PKEY_CTX, EVP_PKEY_CTX_free)
 #define EVP_R_UNKNOWN_PUBLIC_KEY_TYPE 127
 #define EVP_R_UNSUPPORTED_ALGORITHM 128
 #define EVP_R_UNSUPPORTED_PUBLIC_KEY_TYPE 129
+#define EVP_R_NOT_A_PRIVATE_KEY 130
+#define EVP_R_INVALID_SIGNATURE 131
 
 #endif  /* OPENSSL_HEADER_EVP_H */

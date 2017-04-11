@@ -138,7 +138,7 @@ OPENSSL_EXPORT int CBS_get_u24_length_prefixed(CBS *cbs, CBS *out);
 #define CBS_ASN1_SET (0x11 | CBS_ASN1_CONSTRUCTED)
 #define CBS_ASN1_NUMERICSTRING 0x12
 #define CBS_ASN1_PRINTABLESTRING 0x13
-#define CBS_ASN1_T16STRING 0x14
+#define CBS_ASN1_T61STRING 0x14
 #define CBS_ASN1_VIDEOTEXSTRING 0x15
 #define CBS_ASN1_IA5STRING 0x16
 #define CBS_ASN1_UTCTIME 0x17
@@ -189,6 +189,14 @@ OPENSSL_EXPORT int CBS_get_asn1_element(CBS *cbs, CBS *out, unsigned tag_value);
  * it returns one, CBS_get_asn1 may still fail if the rest of the
  * element is malformed. */
 OPENSSL_EXPORT int CBS_peek_asn1_tag(const CBS *cbs, unsigned tag_value);
+
+/* CBS_get_any_asn1 sets |*out| to contain the next ASN.1 element from |*cbs|
+ * (not including tag and length bytes), sets |*out_tag| to the tag number, and
+ * advances |*cbs|. It returns one on success and zero on error. Either of |out|
+ * and |out_tag| may be NULL to ignore the value.
+ *
+ * Tag numbers greater than 30 are not supported (i.e. short form only). */
+OPENSSL_EXPORT int CBS_get_any_asn1(CBS *cbs, CBS *out, unsigned *out_tag);
 
 /* CBS_get_any_asn1_element sets |*out| to contain the next ASN.1 element from
  * |*cbs| (including header bytes) and advances |*cbs|. It sets |*out_tag| to
@@ -248,6 +256,15 @@ OPENSSL_EXPORT int CBS_get_optional_asn1_uint64(CBS *cbs, uint64_t *out,
  * failure. */
 OPENSSL_EXPORT int CBS_get_optional_asn1_bool(CBS *cbs, int *out, unsigned tag,
                                               int default_value);
+
+/* CBS_is_valid_asn1_bitstring returns one if |cbs| is a valid ASN.1 BIT STRING
+ * and zero otherwise. */
+OPENSSL_EXPORT int CBS_is_valid_asn1_bitstring(const CBS *cbs);
+
+/* CBS_asn1_bitstring_has_bit returns one if |cbs| is a valid ASN.1 BIT STRING
+ * and the specified bit is present and set. Otherwise, it returns zero. |bit|
+ * is indexed starting from zero. */
+OPENSSL_EXPORT int CBS_asn1_bitstring_has_bit(const CBS *cbs, unsigned bit);
 
 
 /* CRYPTO ByteBuilder.
@@ -327,8 +344,10 @@ OPENSSL_EXPORT void CBB_cleanup(CBB *cbb);
 OPENSSL_EXPORT int CBB_finish(CBB *cbb, uint8_t **out_data, size_t *out_len);
 
 /* CBB_flush causes any pending length prefixes to be written out and any child
- * |CBB| objects of |cbb| to be invalidated. It returns one on success or zero
- * on error. */
+ * |CBB| objects of |cbb| to be invalidated. This allows |cbb| to continue to be
+ * used after the children go out of scope, e.g. when local |CBB| objects are
+ * added as children to a |CBB| that persists after a function returns. This
+ * function returns one on success or zero on error. */
 OPENSSL_EXPORT int CBB_flush(CBB *cbb);
 
 /* CBB_data returns a pointer to the bytes written to |cbb|. It does not flush

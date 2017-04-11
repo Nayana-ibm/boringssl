@@ -60,6 +60,11 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#if defined(__MINGW32__)
+/* stdio.h is needed on MinGW for __MINGW_PRINTF_FORMAT. */
+#include <stdio.h>
+#endif
+
 #include <openssl/opensslconf.h>
 
 #if defined(BORINGSSL_PREFIX)
@@ -83,8 +88,9 @@ extern "C" {
 #elif defined(__arm) || defined(__arm__) || defined(_M_ARM)
 #define OPENSSL_32_BIT
 #define OPENSSL_ARM
-#elif defined(__PPC64__) || defined(__powerpc64__)
+#elif (defined(__PPC64__) || defined(__powerpc64__)) && defined(_LITTLE_ENDIAN)
 #define OPENSSL_64_BIT
+#define OPENSSL_PPC64LE
 #elif defined(__mips__) && !defined(__LP64__)
 #define OPENSSL_32_BIT
 #define OPENSSL_MIPS
@@ -110,6 +116,14 @@ extern "C" {
 #define OPENSSL_WINDOWS
 #endif
 
+#if defined(__linux__)
+#define OPENSSL_LINUX
+#endif
+
+#if defined(__Fuchsia__)
+#define OPENSSL_FUCHSIA
+#endif
+
 #if defined(TRUSTY)
 #define OPENSSL_TRUSTY
 #define OPENSSL_NO_THREADS
@@ -118,7 +132,7 @@ extern "C" {
 #define OPENSSL_IS_BORINGSSL
 #define BORINGSSL_201512
 #define BORINGSSL_201603
-#define OPENSSL_VERSION_NUMBER 0x10002000
+#define OPENSSL_VERSION_NUMBER 0x100020af
 #define SSLEAY_VERSION_NUMBER OPENSSL_VERSION_NUMBER
 
 /* BORINGSSL_API_VERSION is a positive integer that increments as BoringSSL
@@ -129,7 +143,7 @@ extern "C" {
  * A consumer may use this symbol in the preprocessor to temporarily build
  * against multiple revisions of BoringSSL at the same time. It is not
  * recommended to do so for longer than is necessary. */
-#define BORINGSSL_API_VERSION 2
+#define BORINGSSL_API_VERSION 3
 
 #if defined(BORINGSSL_SHARED_LIBRARY)
 
@@ -159,8 +173,17 @@ extern "C" {
 
 
 #if defined(__GNUC__)
+/* MinGW has two different printf implementations. Ensure the format macro
+ * matches the selected implementation. See
+ * https://sourceforge.net/p/mingw-w64/wiki2/gnu%20printf/. */
+#if defined(__MINGW_PRINTF_FORMAT)
 #define OPENSSL_PRINTF_FORMAT_FUNC(string_index, first_to_check) \
-        __attribute__((__format__(__printf__, string_index, first_to_check)))
+  __attribute__(                                                 \
+      (__format__(__MINGW_PRINTF_FORMAT, string_index, first_to_check)))
+#else
+#define OPENSSL_PRINTF_FORMAT_FUNC(string_index, first_to_check) \
+  __attribute__((__format__(__printf__, string_index, first_to_check)))
+#endif
 #else
 #define OPENSSL_PRINTF_FORMAT_FUNC(string_index, first_to_check)
 #endif
@@ -172,6 +195,10 @@ extern "C" {
 #define OPENSSL_MSVC_PRAGMA(arg)
 #endif
 
+#if defined(BORINGSSL_UNSAFE_FUZZER_MODE) && \
+    !defined(BORINGSSL_UNSAFE_DETERMINISTIC_MODE)
+#define BORINGSSL_UNSAFE_DETERMINISTIC_MODE
+#endif
 
 /* CRYPTO_THREADID is a dummy value. */
 typedef int CRYPTO_THREADID;
@@ -208,9 +235,6 @@ typedef struct NAME_CONSTRAINTS_st NAME_CONSTRAINTS;
 typedef struct Netscape_certificate_sequence NETSCAPE_CERT_SEQUENCE;
 typedef struct Netscape_spkac_st NETSCAPE_SPKAC;
 typedef struct Netscape_spki_st NETSCAPE_SPKI;
-typedef struct PBE2PARAM_st PBE2PARAM;
-typedef struct PBEPARAM_st PBEPARAM;
-typedef struct PBKDF2PARAM_st PBKDF2PARAM;
 typedef struct RIPEMD160state_st RIPEMD160_CTX;
 typedef struct X509_POLICY_CACHE_st X509_POLICY_CACHE;
 typedef struct X509_POLICY_LEVEL_st X509_POLICY_LEVEL;
@@ -242,6 +266,8 @@ typedef struct cbs_st CBS;
 typedef struct cmac_ctx_st CMAC_CTX;
 typedef struct conf_st CONF;
 typedef struct conf_value_st CONF_VALUE;
+typedef struct crypto_buffer_pool_st CRYPTO_BUFFER_POOL;
+typedef struct crypto_buffer_st CRYPTO_BUFFER;
 typedef struct dh_st DH;
 typedef struct dsa_st DSA;
 typedef struct ec_group_st EC_GROUP;
@@ -263,7 +289,6 @@ typedef struct evp_pkey_st EVP_PKEY;
 typedef struct hmac_ctx_st HMAC_CTX;
 typedef struct md4_state_st MD4_CTX;
 typedef struct md5_state_st MD5_CTX;
-typedef struct newhope_poly_st NEWHOPE_POLY;
 typedef struct pkcs12_st PKCS12;
 typedef struct pkcs8_priv_key_info_st PKCS8_PRIV_KEY_INFO;
 typedef struct private_key_st X509_PKEY;
@@ -280,8 +305,10 @@ typedef struct ssl_cipher_st SSL_CIPHER;
 typedef struct ssl_ctx_st SSL_CTX;
 typedef struct ssl_custom_extension SSL_CUSTOM_EXTENSION;
 typedef struct ssl_method_st SSL_METHOD;
+typedef struct ssl_private_key_method_st SSL_PRIVATE_KEY_METHOD;
 typedef struct ssl_session_st SSL_SESSION;
 typedef struct ssl_st SSL;
+typedef struct ssl_ticket_aead_method_st SSL_TICKET_AEAD_METHOD;
 typedef struct st_ERR_FNS ERR_FNS;
 typedef struct v3_ext_ctx X509V3_CTX;
 typedef struct x509_attributes_st X509_ATTRIBUTE;
@@ -361,6 +388,9 @@ class StackAllocated {
  public:
   StackAllocated() { init(&ctx_); }
   ~StackAllocated() { cleanup(&ctx_); }
+
+  StackAllocated(const StackAllocated<T, CleanupRet, init, cleanup> &) = delete;
+  T& operator=(const StackAllocated<T, CleanupRet, init, cleanup> &) = delete;
 
   T *get() { return &ctx_; }
   const T *get() const { return &ctx_; }

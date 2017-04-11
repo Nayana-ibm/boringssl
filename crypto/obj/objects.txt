@@ -1334,5 +1334,5 @@ secg-scheme 14 3 : dhSinglePass-cofactorDH-sha512kdf-scheme
 # NID for X25519 (no corresponding OID).
  : X25519
 
-# NID for CECPQ1 (no corresponding OID)
- : cecpq1
+# See draft-ietf-curdle-pkix-04.
+1 3 101 112 : Ed25519

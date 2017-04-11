@@ -6,8 +6,7 @@ add_library(
   OBJECT
 
   pkcs8.c
-  p8_pkey.c
-  p5_pbe.c
+  pkcs8_x509.c
   p5_pbev2.c
 )
 

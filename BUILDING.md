@@ -2,7 +2,7 @@
 
 ## Build Prerequisites
 
-  * [CMake](https://cmake.org/download/) 2.8.8 or later is required.
+  * [CMake](https://cmake.org/download/) 2.8.11 or later is required.
 
   * Perl 5.6.1 or later is required. On Windows,
     [Active State Perl](http://www.activestate.com/activeperl/) has been
@@ -33,7 +33,7 @@
     executable may be configured explicitly by setting `GO_EXECUTABLE`.
 
   * To build the x86 and x86\_64 assembly, your assembler must support AVX2
-    instructions. If using GNU binutils, you must have 2.22 or later.
+    instructions and MOVBE. If using GNU binutils, you must have 2.22 or later.
 
 ## Building
 
@@ -95,6 +95,15 @@ can replace `armeabi-v7a` in the above with `arm64-v8a` and use API level 21 or
 higher to build aarch64 binaries.
 
 For other options, see [android-cmake's documentation](./third_party/android-cmake/README.md).
+
+### Building for iOS
+
+To build for iOS, pass `-DCMAKE_OSX_SYSROOT=iphoneos` and
+`-DCMAKE_OSX_ARCHITECTURES=ARCH` to CMake, where `ARCH` is the desired
+architecture, matching values used in the `-arch` flag in Apple's toolchain.
+
+Passing multiple architectures for a multiple-architecture build is not
+supported.
 
 ## Known Limitations on Windows
 

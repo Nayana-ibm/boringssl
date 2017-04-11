@@ -26,6 +26,7 @@ import json
 OS_ARCH_COMBOS = [
     ('linux', 'arm', 'linux32', [], 'S'),
     ('linux', 'aarch64', 'linux64', [], 'S'),
+    ('linux', 'ppc64le', 'ppc64le', [], 'S'),
     ('linux', 'x86', 'elf', ['-fPIC', '-DOPENSSL_IA32_SSE2'], 'S'),
     ('linux', 'x86_64', 'elf', [], 'S'),
     ('mac', 'x86', 'macosx', ['-fPIC', '-DOPENSSL_IA32_SSE2'], 'S'),
@@ -78,9 +79,6 @@ class Android(object):
 
 """
 
-  def ExtraFiles(self):
-    return ['android_compat_hacks.c', 'android_compat_keywrap.c']
-
   def PrintVariableSection(self, out, name, files):
     out.write('%s := \\\n' % name)
     for f in sorted(files):
@@ -95,13 +93,13 @@ class Android(object):
       blueprint.write('cc_defaults {\n')
       blueprint.write('    name: "libcrypto_sources",\n')
       blueprint.write('    srcs: [\n')
-      for f in sorted(files['crypto'] + self.ExtraFiles()):
+      for f in sorted(files['crypto']):
         blueprint.write('        "%s",\n' % f)
       blueprint.write('    ],\n')
       blueprint.write('    target: {\n')
 
       for ((osname, arch), asm_files) in asm_outputs:
-        if osname != 'linux':
+        if osname != 'linux' or arch == 'ppc64le':
           continue
         if arch == 'aarch64':
           arch = 'arm64'
@@ -149,6 +147,22 @@ class Android(object):
       blueprint.write('}\n\n')
 
       blueprint.write('cc_defaults {\n')
+      blueprint.write('    name: "boringssl_crypto_test_sources",\n')
+      blueprint.write('    srcs: [\n')
+      for f in sorted(files['crypto_test']):
+        blueprint.write('        "%s",\n' % f)
+      blueprint.write('    ],\n')
+      blueprint.write('}\n\n')
+
+      blueprint.write('cc_defaults {\n')
+      blueprint.write('    name: "boringssl_ssl_test_sources",\n')
+      blueprint.write('    srcs: [\n')
+      for f in sorted(files['ssl_test']):
+        blueprint.write('        "%s",\n' % f)
+      blueprint.write('    ],\n')
+      blueprint.write('}\n\n')
+
+      blueprint.write('cc_defaults {\n')
       blueprint.write('    name: "boringssl_tests_sources",\n')
       blueprint.write('    srcs: [\n')
       for f in sorted(files['test']):
@@ -160,24 +174,13 @@ class Android(object):
     with open('sources.mk', 'w+') as makefile:
       makefile.write(self.header)
 
-      crypto_files = files['crypto'] + self.ExtraFiles()
-      self.PrintVariableSection(makefile, 'crypto_sources', crypto_files)
+      self.PrintVariableSection(makefile, 'crypto_sources', files['crypto'])
 
       for ((osname, arch), asm_files) in asm_outputs:
         if osname != 'linux':
           continue
         self.PrintVariableSection(
             makefile, '%s_%s_sources' % (osname, arch), asm_files)
-
-
-class AndroidStandalone(Android):
-  """AndroidStandalone is for Android builds outside of the Android-system, i.e.
-
-  for applications that wish wish to ship BoringSSL.
-  """
-
-  def ExtraFiles(self):
-    return []
 
 
 class Bazel(object):
@@ -205,9 +208,12 @@ class Bazel(object):
       out.write(self.header)
 
       self.PrintVariableSection(out, 'ssl_headers', files['ssl_headers'])
+      self.PrintVariableSection(out, 'fips_fragments', files['fips_fragments'])
       self.PrintVariableSection(
           out, 'ssl_internal_headers', files['ssl_internal_headers'])
       self.PrintVariableSection(out, 'ssl_sources', files['ssl'])
+      self.PrintVariableSection(out, 'ssl_c_sources', files['ssl_c'])
+      self.PrintVariableSection(out, 'ssl_cc_sources', files['ssl_cc'])
       self.PrintVariableSection(out, 'crypto_headers', files['crypto_headers'])
       self.PrintVariableSection(
           out, 'crypto_internal_headers', files['crypto_internal_headers'])
@@ -232,6 +238,10 @@ class Bazel(object):
         out.write('    "%s",\n' % PathOf(filename))
 
       out.write(']\n\n')
+
+      self.PrintVariableSection(out, 'crypto_test_sources',
+                                files['crypto_test'])
+      self.PrintVariableSection(out, 'ssl_test_sources', files['ssl_test'])
 
       out.write('def create_tests(copts, crypto, ssl):\n')
       name_counts = {}
@@ -279,7 +289,7 @@ class Bazel(object):
               out.write('          "%s",\n' % arg)
           out.write('      ],\n')
 
-        out.write('      copts = copts,\n')
+        out.write('      copts = copts + ["-DBORINGSSL_SHARED_LIBRARY"],\n')
 
         if len(data_files) > 0:
           out.write('      data = [\n')
@@ -343,9 +353,12 @@ class GN(object):
       self.firstSection = True
       out.write(self.header)
 
-      self.PrintVariableSection(out, '_test_support_sources',
+      self.PrintVariableSection(out, 'test_support_sources',
                                 files['test_support'] +
                                 files['test_support_headers'])
+      self.PrintVariableSection(out, 'crypto_test_sources',
+                                files['crypto_test'])
+      self.PrintVariableSection(out, 'ssl_test_sources', files['ssl_test'])
       out.write('\n')
 
       out.write('template("create_tests") {\n')
@@ -359,7 +372,7 @@ class GN(object):
         out.write('    sources = [\n')
         out.write('      "%s",\n' % test)
         out.write('    ]\n')
-        out.write('    sources += _test_support_sources\n')
+        out.write('    sources += test_support_sources\n')
         out.write('    if (defined(invoker.configs_exclude)) {\n')
         out.write('      configs -= invoker.configs_exclude\n')
         out.write('    }\n')
@@ -412,43 +425,6 @@ class GYP(object):
 
       gypi.write('  }\n}\n')
 
-    with open('boringssl_tests.gypi', 'w+') as test_gypi:
-      test_gypi.write(self.header + '{\n  \'targets\': [\n')
-
-      test_names = []
-      for test in sorted(files['test']):
-        test_name = 'boringssl_%s' % os.path.splitext(os.path.basename(test))[0]
-        test_gypi.write("""    {
-      'target_name': '%s',
-      'type': 'executable',
-      'dependencies': [
-        'boringssl.gyp:boringssl',
-      ],
-      'sources': [
-        '%s',
-        '<@(boringssl_test_support_sources)',
-      ],
-      # TODO(davidben): Fix size_t truncations in BoringSSL.
-      # https://crbug.com/429039
-      'msvs_disabled_warnings': [ 4267, ],
-    },\n""" % (test_name, test))
-        test_names.append(test_name)
-
-      test_names.sort()
-
-      test_gypi.write('  ],\n  \'variables\': {\n')
-
-      self.PrintVariableSection(test_gypi, 'boringssl_test_support_sources',
-                                files['test_support'] +
-                                files['test_support_headers'])
-
-      test_gypi.write('    \'boringssl_test_targets\': [\n')
-
-      for test in sorted(test_names):
-        test_gypi.write("""      '%s',\n""" % test)
-
-      test_gypi.write('    ],\n  }\n}\n')
-
 
 def FindCMakeFiles(directory):
   """Returns list of all CMakeLists.txt files recursively in directory."""
@@ -461,8 +437,15 @@ def FindCMakeFiles(directory):
 
   return cmakefiles
 
+def OnlyFIPSFragments(path, dent, is_dir):
+  return is_dir or path.startswith(
+      os.path.join('src', 'crypto', 'fipsmodule', ''))
 
-def NoTests(dent, is_dir):
+def NoTestsNorFIPSFragments(path, dent, is_dir):
+  return (NoTests(path, dent, is_dir) and
+      (is_dir or not OnlyFIPSFragments(path, dent, is_dir)))
+
+def NoTests(path, dent, is_dir):
   """Filter function that can be passed to FindCFiles in order to remove test
   sources."""
   if is_dir:
@@ -470,7 +453,7 @@ def NoTests(dent, is_dir):
   return 'test.' not in dent and not dent.startswith('example_')
 
 
-def OnlyTests(dent, is_dir):
+def OnlyTests(path, dent, is_dir):
   """Filter function that can be passed to FindCFiles in order to remove
   non-test sources."""
   if is_dir:
@@ -478,13 +461,25 @@ def OnlyTests(dent, is_dir):
   return '_test.' in dent or dent.startswith('example_')
 
 
-def AllFiles(dent, is_dir):
+def AllFiles(path, dent, is_dir):
   """Filter function that can be passed to FindCFiles in order to include all
   sources."""
   return True
 
 
-def SSLHeaderFiles(dent, is_dir):
+def NoTestRunnerFiles(path, dent, is_dir):
+  """Filter function that can be passed to FindCFiles or FindHeaderFiles in
+  order to exclude test runner files."""
+  # NOTE(martinkr): This prevents .h/.cc files in src/ssl/test/runner, which
+  # are in their own subpackage, from being included in boringssl/BUILD files.
+  return not is_dir or dent != 'runner'
+
+
+def NotGTestMain(path, dent, is_dir):
+  return dent != 'gtest_main.cc'
+
+
+def SSLHeaderFiles(path, dent, is_dir):
   return dent in ['ssl.h', 'tls1.h', 'ssl23.h', 'ssl3.h', 'dtls1.h']
 
 
@@ -497,12 +492,12 @@ def FindCFiles(directory, filter_func):
     for filename in filenames:
       if not filename.endswith('.c') and not filename.endswith('.cc'):
         continue
-      if not filter_func(filename, False):
+      if not filter_func(path, filename, False):
         continue
       cfiles.append(os.path.join(path, filename))
 
     for (i, dirname) in enumerate(dirnames):
-      if not filter_func(dirname, True):
+      if not filter_func(path, dirname, True):
         del dirnames[i]
 
   return cfiles
@@ -516,12 +511,12 @@ def FindHeaderFiles(directory, filter_func):
     for filename in filenames:
       if not filename.endswith('.h'):
         continue
-      if not filter_func(filename, False):
+      if not filter_func(path, filename, False):
         continue
       hfiles.append(os.path.join(path, filename))
 
       for (i, dirname) in enumerate(dirnames):
-        if not filter_func(dirname, True):
+        if not filter_func(path, dirname, True):
           del dirnames[i]
 
   return hfiles
@@ -586,6 +581,8 @@ def ArchForAsmFilename(filename):
     return ['aarch64']
   elif 'arm' in filename:
     return ['arm']
+  elif 'ppc' in filename:
+    return ['ppc64le']
   else:
     raise ValueError('Unknown arch for asm filename: ' + filename)
 
@@ -622,9 +619,15 @@ def WriteAsmFiles(perlasms):
   return asmfiles
 
 
+def IsGTest(path):
+  with open(path) as f:
+    return "#include <gtest/gtest.h>" in f.read()
+
+
 def main(platforms):
-  crypto_c_files = FindCFiles(os.path.join('src', 'crypto'), NoTests)
-  ssl_c_files = FindCFiles(os.path.join('src', 'ssl'), NoTests)
+  crypto_c_files = FindCFiles(os.path.join('src', 'crypto'), NoTestsNorFIPSFragments)
+  fips_fragments = FindCFiles(os.path.join('src', 'crypto', 'fipsmodule'), OnlyFIPSFragments)
+  ssl_source_files = FindCFiles(os.path.join('src', 'ssl'), NoTests)
   tool_c_files = FindCFiles(os.path.join('src', 'tool'), NoTests)
   tool_h_files = FindHeaderFiles(os.path.join('src', 'tool'), AllFiles)
 
@@ -636,13 +639,24 @@ def main(platforms):
   crypto_c_files.append('err_data.c')
 
   test_support_c_files = FindCFiles(os.path.join('src', 'crypto', 'test'),
-                                    AllFiles)
+                                    NotGTestMain)
   test_support_h_files = (
       FindHeaderFiles(os.path.join('src', 'crypto', 'test'), AllFiles) +
-      FindHeaderFiles(os.path.join('src', 'ssl', 'test'), AllFiles))
+      FindHeaderFiles(os.path.join('src', 'ssl', 'test'), NoTestRunnerFiles))
 
-  test_c_files = FindCFiles(os.path.join('src', 'crypto'), OnlyTests)
-  test_c_files += FindCFiles(os.path.join('src', 'ssl'), OnlyTests)
+  test_c_files = []
+  crypto_test_files = ['src/crypto/test/gtest_main.cc']
+  # TODO(davidben): Remove this loop once all tests are converted.
+  for path in FindCFiles(os.path.join('src', 'crypto'), OnlyTests):
+    if IsGTest(path):
+      crypto_test_files.append(path)
+      # bcm_hashunset_test.c is only used in the FIPS build process.
+    elif path != os.path.join('src', 'crypto', 'fipsmodule',
+                              'bcm_hashunset_test.c'):
+      test_c_files.append(path)
+
+  ssl_test_files = FindCFiles(os.path.join('src', 'ssl'), OnlyTests)
+  ssl_test_files.append('src/crypto/test/gtest_main.cc')
 
   fuzz_c_files = FindCFiles(os.path.join('src', 'fuzz'), NoTests)
 
@@ -651,8 +665,8 @@ def main(platforms):
           os.path.join('src', 'include', 'openssl'),
           SSLHeaderFiles))
 
-  def NotSSLHeaderFiles(filename, is_dir):
-    return not SSLHeaderFiles(filename, is_dir)
+  def NotSSLHeaderFiles(path, filename, is_dir):
+    return not SSLHeaderFiles(path, filename, is_dir)
   crypto_h_files = (
       FindHeaderFiles(
           os.path.join('src', 'include', 'openssl'),
@@ -664,14 +678,17 @@ def main(platforms):
 
   with open('src/util/all_tests.json', 'r') as f:
     tests = json.load(f)
-  # Skip tests for libdecrepit. Consumers import that manually.
-  tests = [test for test in tests if not test[0].startswith("decrepit/")]
+  # For now, GTest-based tests are specified manually.
+  tests = [test for test in tests if test[0] not in ['crypto/crypto_test',
+                                                     'decrepit/decrepit_test',
+                                                     'ssl/ssl_test']]
   test_binaries = set([test[0] for test in tests])
   test_sources = set([
       test.replace('.cc', '').replace('.c', '').replace(
           'src/',
           '')
       for test in test_c_files])
+
   if test_binaries != test_sources:
     print 'Test sources and configured tests do not match'
     a = test_binaries.difference(test_sources)
@@ -685,10 +702,15 @@ def main(platforms):
       'crypto': crypto_c_files,
       'crypto_headers': crypto_h_files,
       'crypto_internal_headers': crypto_internal_h_files,
+      'crypto_test': sorted(crypto_test_files),
+      'fips_fragments': fips_fragments,
       'fuzz': fuzz_c_files,
-      'ssl': ssl_c_files,
+      'ssl': ssl_source_files,
+      'ssl_c': [s for s in ssl_source_files if s.endswith('.c')],
+      'ssl_cc': [s for s in ssl_source_files if s.endswith('.cc')],
       'ssl_headers': ssl_h_files,
       'ssl_internal_headers': ssl_internal_h_files,
+      'ssl_test': sorted(ssl_test_files),
       'tool': tool_c_files,
       'tool_headers': tool_h_files,
       'test': test_c_files,
@@ -707,7 +729,7 @@ def main(platforms):
 
 if __name__ == '__main__':
   parser = optparse.OptionParser(usage='Usage: %prog [--prefix=<path>]'
-      ' [android|android-standalone|bazel|gn|gyp]')
+      ' [android|bazel|gn|gyp]')
   parser.add_option('--prefix', dest='prefix',
       help='For Bazel, prepend argument to all source files')
   options, args = parser.parse_args(sys.argv[1:])
@@ -721,8 +743,6 @@ if __name__ == '__main__':
   for s in args:
     if s == 'android':
       platforms.append(Android())
-    elif s == 'android-standalone':
-      platforms.append(AndroidStandalone())
     elif s == 'bazel':
       platforms.append(Bazel())
     elif s == 'gn':

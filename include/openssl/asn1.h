@@ -205,6 +205,8 @@ struct asn1_object_st
 	int flags;	/* Should we free this one */
 	};
 
+DECLARE_STACK_OF(ASN1_OBJECT)
+
 #define ASN1_STRING_FLAG_BITS_LEFT 0x08 /* Set if 0x07 has bits left value */
 /* This indicates that the ASN1_STRING is not a real value but just a place
  * holder for the location where indefinite length constructed data should
@@ -244,11 +246,16 @@ typedef struct ASN1_ENCODING_st
 	{
 	unsigned char *enc;	/* DER encoding */
 	long len;		/* Length of encoding */
-	int modified;		 /* set to 1 if 'enc' is invalid */
+	int modified;		/* set to 1 if 'enc' is invalid */
+	/* alias_only is zero if |enc| owns the buffer that it points to
+	 * (although |enc| may still be NULL). If one, |enc| points into a
+	 * buffer that is owned elsewhere. */
+	unsigned alias_only:1;
+	/* alias_only_on_next_parse is one iff the next parsing operation
+	 * should avoid taking a copy of the input and rather set
+	 * |alias_only|. */
+	unsigned alias_only_on_next_parse:1;
 	} ASN1_ENCODING;
-
-/* Used with ASN1 LONG type: if a long is set to this it is omitted */
-#define ASN1_LONG_UNDEF	0x7fffffffL
 
 #define STABLE_FLAGS_MALLOC	0x01
 #define STABLE_NO_MASK		0x02
@@ -927,6 +934,8 @@ OPENSSL_EXPORT ASN1_TYPE *ASN1_generate_v3(char *str, X509V3_CTX *cnf);
 extern "C++" {
 
 namespace bssl {
+
+BORINGSSL_MAKE_STACK_DELETER(ASN1_OBJECT, ASN1_OBJECT_free)
 
 BORINGSSL_MAKE_DELETER(ASN1_OBJECT, ASN1_OBJECT_free)
 BORINGSSL_MAKE_DELETER(ASN1_STRING, ASN1_STRING_free)

@@ -64,7 +64,7 @@ extern "C" {
  *
  * The "seal" and "open" operations are atomic - an entire message must be
  * encrypted or decrypted in a single call. Large messages may have to be split
- * up in order to accomodate this. When doing so, be mindful of the need not to
+ * up in order to accommodate this. When doing so, be mindful of the need not to
  * repeat nonces and the possibility that an attacker could duplicate, reorder
  * or drop message chunks. For example, using a single key for a given (large)
  * message and sealing chunks with nonces counting from zero would be secure as
@@ -100,25 +100,6 @@ OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_256_gcm(void);
  * Poly1305 as described in RFC 7539. */
 OPENSSL_EXPORT const EVP_AEAD *EVP_aead_chacha20_poly1305(void);
 
-/* EVP_aead_chacha20_poly1305_old is an AEAD built from ChaCha20 and
- * Poly1305 that is used in the experimental ChaCha20-Poly1305 TLS cipher
- * suites. */
-OPENSSL_EXPORT const EVP_AEAD *EVP_aead_chacha20_poly1305_old(void);
-
-/* EVP_aead_aes_128_key_wrap is AES-128 Key Wrap mode. This should never be
- * used except to interoperate with existing systems that use this mode.
- *
- * If the nonce is empty then the default nonce will be used, otherwise it must
- * be eight bytes long. The input must be a multiple of eight bytes long. No
- * additional data can be given to this mode. */
-OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_key_wrap(void);
-
-/* EVP_aead_aes_256_key_wrap is AES-256 in Key Wrap mode. This should never be
- * used except to interoperate with existing systems that use this mode.
- *
- * See |EVP_aead_aes_128_key_wrap| for details. */
-OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_256_key_wrap(void);
-
 /* EVP_aead_aes_128_ctr_hmac_sha256 is AES-128 in CTR mode with HMAC-SHA256 for
  * authentication. The nonce is 12 bytes; the bottom 32-bits are used as the
  * block counter, thus the maximum plaintext size is 64GB. */
@@ -127,6 +108,14 @@ OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_ctr_hmac_sha256(void);
 /* EVP_aead_aes_256_ctr_hmac_sha256 is AES-256 in CTR mode with HMAC-SHA256 for
  * authentication. See |EVP_aead_aes_128_ctr_hmac_sha256| for details. */
 OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_256_ctr_hmac_sha256(void);
+
+/* EVP_aead_aes_128_gcm_siv is AES-128 in GCM-SIV mode. See
+ * https://tools.ietf.org/html/draft-irtf-cfrg-gcmsiv-02 */
+OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_gcm_siv(void);
+
+/* EVP_aead_aes_256_gcm_siv is AES-256 in GCM-SIV mode. See
+ * https://tools.ietf.org/html/draft-irtf-cfrg-gcmsiv-02 */
+OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_256_gcm_siv(void);
 
 /* EVP_has_aes_hardware returns one if we enable hardware support for fast and
  * constant-time AES-GCM. */
@@ -256,6 +245,10 @@ OPENSSL_EXPORT int EVP_AEAD_CTX_open(const EVP_AEAD_CTX *ctx, uint8_t *out,
                                      const uint8_t *in, size_t in_len,
                                      const uint8_t *ad, size_t ad_len);
 
+/* EVP_AEAD_CTX_aead returns the underlying AEAD for |ctx|, or NULL if one has
+ * not been set. */
+OPENSSL_EXPORT const EVP_AEAD *EVP_AEAD_CTX_aead(const EVP_AEAD_CTX *ctx);
+
 
 /* TLS-specific AEAD algorithms.
  *
@@ -265,9 +258,6 @@ OPENSSL_EXPORT int EVP_AEAD_CTX_open(const EVP_AEAD_CTX *ctx, uint8_t *out,
  * not be used concurrently. Any nonces are used as IVs, so they must be
  * unpredictable. They only accept an |ad| parameter of length 11 (the standard
  * TLS one with length omitted). */
-
-OPENSSL_EXPORT const EVP_AEAD *EVP_aead_rc4_md5_tls(void);
-OPENSSL_EXPORT const EVP_AEAD *EVP_aead_rc4_sha1_tls(void);
 
 OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_cbc_sha1_tls(void);
 OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_cbc_sha1_tls_implicit_iv(void);
@@ -292,8 +282,6 @@ OPENSSL_EXPORT const EVP_AEAD *EVP_aead_null_sha1_tls(void);
  * and may not be used concurrently. They only accept an |ad| parameter of
  * length 9 (the standard TLS one with length and version omitted). */
 
-OPENSSL_EXPORT const EVP_AEAD *EVP_aead_rc4_md5_ssl3(void);
-OPENSSL_EXPORT const EVP_AEAD *EVP_aead_rc4_sha1_ssl3(void);
 OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_cbc_sha1_ssl3(void);
 OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_256_cbc_sha1_ssl3(void);
 OPENSSL_EXPORT const EVP_AEAD *EVP_aead_des_ede3_cbc_sha1_ssl3(void);
@@ -314,11 +302,6 @@ enum evp_aead_direction_t {
 OPENSSL_EXPORT int EVP_AEAD_CTX_init_with_direction(
     EVP_AEAD_CTX *ctx, const EVP_AEAD *aead, const uint8_t *key, size_t key_len,
     size_t tag_len, enum evp_aead_direction_t dir);
-
-/* EVP_AEAD_CTX_get_rc4_state sets |*out_key| to point to an RC4 key structure.
- * It returns one on success or zero if |ctx| doesn't have an RC4 key. */
-OPENSSL_EXPORT int EVP_AEAD_CTX_get_rc4_state(const EVP_AEAD_CTX *ctx,
-                                              const RC4_KEY **out_key);
 
 /* EVP_AEAD_CTX_get_iv sets |*out_len| to the length of the IV for |ctx| and
  * sets |*out_iv| to point to that many bytes of the current IV. This is only

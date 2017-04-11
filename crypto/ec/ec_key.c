@@ -91,7 +91,7 @@ EC_KEY *EC_KEY_new_method(const ENGINE *engine) {
     return NULL;
   }
 
-  memset(ret, 0, sizeof(EC_KEY));
+  OPENSSL_memset(ret, 0, sizeof(EC_KEY));
 
   if (engine) {
     ret->ecdsa_meth = ENGINE_get_ECDSA_method(engine);
@@ -425,6 +425,16 @@ int EC_KEY_generate_key(EC_KEY *eckey) {
   }
 
   const BIGNUM *order = EC_GROUP_get0_order(eckey->group);
+
+  /* Check that the size of the group order is FIPS compliant (FIPS 186-4
+   * B.4.2). */
+  if (BN_num_bits(order) < 160) {
+    OPENSSL_PUT_ERROR(EC, EC_R_INVALID_GROUP_ORDER);
+    goto err;
+  }
+
+  /* Generate the private key by testing candidates (FIPS 186-4 B.4.2).
+   * TODO(svaldez): Fix BN_rand_range_ex to implement B.4.2. */
   if (!BN_rand_range_ex(priv_key, 1, order)) {
     goto err;
   }
